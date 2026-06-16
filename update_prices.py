@@ -1,102 +1,64 @@
-#!/usr/bin/env python3
-"""
-Actualiza precios en index.html usando Yahoo Finance.
-Corre automaticamente via GitHub Actions todos los dias de semana.
-"""
+name: Actualizar precios diarios
 
-import yfinance as yf
-import re
-from datetime import datetime
+on:
+  schedule:
+    - cron: '0 12 * * 1-5'
+  workflow_dispatch:
 
-TICKERS = [
-    "GOOGL","MSFT","NVDA","AVGO","META","AMZN","TSM","ASML","BRKB","COST",
-    "V","MA","INTU","NOW","ANET","PANW","CRWD","MELI","LLY","AMAT","LRCX",
-    "KLAC","QCOM","CEG","BX","PLTR","ARM","MU","WDC","VRT","APP",
-    "NET","DDOG","TTD","SNOW","CAVA","DUOL","DECK","RACE","KO","PG","JNJ",
-    "WMT","MCD","PEP","CL","JPM","BLK","UNH","ADBE","CRM","TXN","MRVL",
-    "FDX","DRI","GS","MS","CME","SPGI","MCO","AXP","MDB","MNDY","GTLB",
-    "TDG","HEI","HWM","GE","ETN","TT","PWR","FIX","HII","NVO","REGN",
-    "VRTX","ISRG","SYK","BSX","MEDP","RMD","CMG","LULU","BKNG","ABNB",
-    "INTC","GLW","AMD",
-    "SPY","QQQ","SMH","CIBR","URA","GLD","XLF","XLE","DIA","EWZ","IWM","EEM"
-]
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
-def fetch_prices():
-    print(f"Descargando {len(TICKERS)} tickers de Yahoo Finance...")
-    prices = {}
-    batch_size = 20
-    for i in range(0, len(TICKERS), batch_size):
-        batch = TICKERS[i:i+batch_size]
-        try:
-            data = yf.download(batch, period="2d", interval="1d", progress=False, auto_adjust=True)
-            if len(batch) == 1:
-                t = batch[0]
-                if not data.empty:
-                    val = data['Close'].dropna().iloc[-1]
-                    if float(val) > 0:
-                        prices[t] = round(float(val), 2)
-            else:
-                for t in batch:
-                    try:
-                        if ('Close', t) in data.columns:
-                            val = data['Close'][t].dropna().iloc[-1]
-                            if float(val) > 0:
-                                prices[t] = round(float(val), 2)
-                        elif t in data['Close'].columns:
-                            val = data['Close'][t].dropna().iloc[-1]
-                            if float(val) > 0:
-                                prices[t] = round(float(val), 2)
-                    except Exception as e:
-                        print(f"  Error {t}: {e}")
-        except Exception as e:
-            print(f"  Error batch {batch[:3]}: {e}")
-    print(f"✓ {len(prices)} precios obtenidos")
-    return prices
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-def update_html(prices):
-    with open('index.html', 'r', encoding='utf-8') as f:
-        html = f.read()
+      - name: Python setup
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    updated = 0
-    for ticker, new_price in prices.items():
-        pattern = r'(\{t:"' + re.escape(ticker) + r'"[^}]*?,p:)([\d.]+)'
-        def replace_price(m, np=new_price):
-            return m.group(1) + str(np)
-        new_html, count = re.subn(pattern, replace_price, html)
-        if count > 0:
-            html = new_html
-            updated += 1
+      - name: Instalar dependencias
+        run: pip install yfinance requests
 
-    # Recalculate upside for each ticker
-    for ticker, new_price in prices.items():
-        # Find target for this ticker
-        target_match = re.search(r't:"' + re.escape(ticker) + r'"[^}]*?,p:[\d.]+,target:([\d.]+),upside:([-\d.]+)', html)
-        if target_match:
-            target = float(target_match.group(1))
-            new_upside = round((target - new_price) / new_price, 4)
-            old_upside = target_match.group(2)
-            html = html.replace(f',upside:{old_upside},', f',upside:{new_upside},', 1)
+      - name: Actualizar precios
+        run: python update_prices.py
 
-    # Update date in footer
-    today = datetime.now().strftime('%d/%m/%Y')
-    html = re.sub(r'datos al \d{2}/\d{2}/\d{4}', f'datos al {today}', html)
+      - name: Commit cambios
+        run: |
+          git config user.name "Investment Radar Bot"
+          git config user.email "bot@pergolesi.com"
+          git add index.html
+          git diff --staged --quiet || git commit -m "Auto-update precios $(date +'%d/%m/%Y %H:%M')"
+          git push
 
-    with open('index.html', 'w', encoding='utf-8') as f:
-        f.write(html)
+      - name: Deploy a Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          python - <<'PYEOF'
+          import requests, os, zipfile, io
 
-    print(f"✓ {updated} precios actualizados en index.html")
-    print(f"✓ Fecha actualizada: {today}")
-    return updated
+          token = os.environ['CLOUDFLARE_API_TOKEN']
+          account_id = os.environ['CLOUDFLARE_ACCOUNT_ID']
+          project = 'radarinversionesestudiopergolesi'
 
-if __name__ == "__main__":
-    print("=" * 50)
-    print(f"Investment Radar — Auto-update")
-    print(f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M UTC')}")
-    print("=" * 50)
-    prices = fetch_prices()
-    if not prices:
-        print("ERROR: Sin precios")
-        exit(1)
-    update_html(prices)
-    print("=" * 50)
-    print("✅ Completado")
+          buf = io.BytesIO()
+          with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+              z.write('index.html')
+          buf.seek(0)
+
+          url = f'https://api.cloudflare.com/client/v4/accounts/{account_id}/pages/projects/{project}/deployments'
+          headers = {'Authorization': f'Bearer {token}'}
+          files = {'file': ('index.html.zip', buf, 'application/zip')}
+          r = requests.post(url, headers=headers, files=files)
+          data = r.json()
+          if data.get('success'):
+              print('Deploy exitoso:', data['result'].get('url', ''))
+          else:
+              print('Error:', data.get('errors'))
+              exit(1)
+          PYEOF
