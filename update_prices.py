@@ -38,27 +38,4 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          python - <<'PYEOF'
-          import requests, os, zipfile, io
-
-          token = os.environ['CLOUDFLARE_API_TOKEN']
-          account_id = os.environ['CLOUDFLARE_ACCOUNT_ID']
-          project = 'radarinversionesestudiopergolesi'
-
-          buf = io.BytesIO()
-          with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
-              z.write('index.html')
-          buf.seek(0)
-
-          url = f'https://api.cloudflare.com/client/v4/accounts/{account_id}/pages/projects/{project}/deployments'
-          headers = {'Authorization': f'Bearer {token}'}
-          files = {'file': ('index.html.zip', buf, 'application/zip')}
-          r = requests.post(url, headers=headers, files=files)
-          data = r.json()
-          if data.get('success'):
-              print('Deploy exitoso:', data['result'].get('url', ''))
-          else:
-              print('Error:', data.get('errors'))
-              exit(1)
-          PYEOF
+        run: python deploy_cloudflare.py
